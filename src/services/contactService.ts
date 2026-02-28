@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// Properly infer Contact type from Prisma
+// Infer Contact type from Prisma
 type Contact = Awaited<ReturnType<typeof prisma.contact.findFirst>>;
 
 export const identifyContact = async (
@@ -13,6 +13,7 @@ export const identifyContact = async (
     throw new Error("Either email or phoneNumber must be provided");
   }
 
+  // 1️⃣ Find initial matches
   const initialMatches = await prisma.contact.findMany({
     where: {
       OR: [
@@ -22,6 +23,7 @@ export const identifyContact = async (
     },
   });
 
+  // 2️⃣ If no matches → create new primary
   if (initialMatches.length === 0) {
     const newPrimary = await prisma.contact.create({
       data: {
@@ -34,12 +36,16 @@ export const identifyContact = async (
     return formatResponse([newPrimary]);
   }
 
+  // 3️⃣ Get full connected graph
   const allRelatedContacts = await getAllLinkedContacts(initialMatches);
 
+  // 4️⃣ Determine oldest contact
   const primary = findOldestContact(allRelatedContacts);
 
+  // 5️⃣ Ensure only one primary
   await ensureSinglePrimary(primary, allRelatedContacts);
 
+  // 6️⃣ Refresh contacts
   const refreshedContacts = await prisma.contact.findMany({
     where: {
       OR: [{ id: primary.id }, { linkedId: primary.id }],
@@ -47,13 +53,13 @@ export const identifyContact = async (
     orderBy: { createdAt: "asc" },
   });
 
+  // 7️⃣ Check if new secondary needed
   const emailExists = refreshedContacts.some(
-    (c: typeof refreshedContacts[number]) => c.email === email
+    (c) => c.email === email
   );
 
   const phoneExists = refreshedContacts.some(
-    (c: typeof refreshedContacts[number]) =>
-      c.phoneNumber === phoneNumber
+    (c) => c.phoneNumber === phoneNumber
   );
 
   if ((email && !emailExists) || (phoneNumber && !phoneExists)) {
@@ -67,6 +73,7 @@ export const identifyContact = async (
     });
   }
 
+  // 8️⃣ Final fetch
   const finalContacts = await prisma.contact.findMany({
     where: {
       OR: [{ id: primary.id }, { linkedId: primary.id }],
@@ -79,10 +86,8 @@ export const identifyContact = async (
 
 
 
-// BFS expansion
-const getAllLinkedContacts = async (
-  contacts: Awaited<ReturnType<typeof prisma.contact.findMany>>
-) => {
+// 🔥 Fetch full connected component (BFS style)
+const getAllLinkedContacts = async (contacts: any[]) => {
   const visited = new Set<number>();
   const queue = [...contacts];
 
@@ -119,9 +124,8 @@ const getAllLinkedContacts = async (
 
 
 
-const findOldestContact = (
-  contacts: Awaited<ReturnType<typeof prisma.contact.findMany>>
-) => {
+// 🔥 Find oldest contact
+const findOldestContact = (contacts: any[]) => {
   return contacts.reduce((oldest, current) =>
     current.createdAt < oldest.createdAt ? current : oldest
   );
@@ -129,12 +133,13 @@ const findOldestContact = (
 
 
 
+// 🔥 Ensure single primary
 const ensureSinglePrimary = async (
-  primary: Awaited<ReturnType<typeof prisma.contact.findFirst>>,
-  contacts: Awaited<ReturnType<typeof prisma.contact.findMany>>
+  primary: any,
+  contacts: any[]
 ) => {
   for (const contact of contacts) {
-    if (contact.id === primary?.id) {
+    if (contact.id === primary.id) {
       if (contact.linkPrecedence !== "primary") {
         await prisma.contact.update({
           where: { id: contact.id },
@@ -147,13 +152,13 @@ const ensureSinglePrimary = async (
     } else {
       if (
         contact.linkPrecedence !== "secondary" ||
-        contact.linkedId !== primary?.id
+        contact.linkedId !== primary.id
       ) {
         await prisma.contact.update({
           where: { id: contact.id },
           data: {
             linkPrecedence: "secondary",
-            linkedId: primary?.id,
+            linkedId: primary.id,
           },
         });
       }
@@ -163,9 +168,8 @@ const ensureSinglePrimary = async (
 
 
 
-const formatResponse = (
-  contacts: Awaited<ReturnType<typeof prisma.contact.findMany>>
-) => {
+// 🔥 Format final response
+const formatResponse = (contacts: any[]) => {
   const primary = contacts.find(
     (c) => c.linkPrecedence === "primary"
   );

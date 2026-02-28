@@ -88,3 +88,7 @@ Server runs on:
 ```
 http://localhost:3000
 ```
+## 🌍 Hosted API Endpoint
+
+Live URL:
+https://bitespeed-identity-2b1x.onrender.com/identify
